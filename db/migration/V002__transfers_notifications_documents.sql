@@ -1,0 +1,11 @@
+BEGIN;
+CREATE TABLE transfer_beneficiary (beneficiary_reference text PRIMARY KEY, owner_reference text NOT NULL, display_name text NOT NULL, iban_ciphertext bytea, internal_account_reference text, verification_of_payee text NOT NULL, status text NOT NULL, created_at timestamptz NOT NULL);
+CREATE TABLE transfer_quote (quote_reference text PRIMARY KEY, customer_reference text NOT NULL, source_account_reference text NOT NULL REFERENCES ledger_account(account_reference), beneficiary_reference text NOT NULL REFERENCES transfer_beneficiary(beneficiary_reference), amount_minor bigint NOT NULL CHECK (amount_minor > 0), fee_minor bigint NOT NULL CHECK (fee_minor >= 0), currency char(3) NOT NULL, status text NOT NULL, expires_at timestamptz NOT NULL, idempotency_key text NOT NULL UNIQUE);
+CREATE TABLE bank_transfer (transfer_reference text PRIMARY KEY, quote_reference text NOT NULL UNIQUE REFERENCES transfer_quote(quote_reference), transaction_reference text NOT NULL UNIQUE REFERENCES ledger_journal(journal_reference), status text NOT NULL, correlation_id text NOT NULL, created_at timestamptz NOT NULL, settled_at timestamptz);
+CREATE TABLE notification_inbox (notification_reference text PRIMARY KEY, owner_reference text NOT NULL, source_event_id text NOT NULL UNIQUE REFERENCES platform_outbox(event_id), title text NOT NULL, body text NOT NULL, category text NOT NULL, deep_link text NOT NULL, created_at timestamptz NOT NULL, read_at timestamptz);
+CREATE TABLE stored_document (document_reference text PRIMARY KEY, owner_reference text NOT NULL, operation_reference text NOT NULL, document_type text NOT NULL, object_storage_reference text NOT NULL, mime_type text NOT NULL, size_bytes bigint NOT NULL, created_at timestamptz NOT NULL);
+CREATE INDEX idx_transfer_owner ON bank_transfer(quote_reference, created_at);
+CREATE INDEX idx_notification_owner ON notification_inbox(owner_reference, created_at DESC);
+CREATE INDEX idx_document_owner ON stored_document(owner_reference, created_at DESC);
+INSERT INTO platform_schema_version(version) VALUES (2);
+COMMIT;
