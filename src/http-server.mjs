@@ -1,11 +1,12 @@
 import { createServer } from "node:http";
-import { BankError, opaqueId, safeEqual } from "./shared/kernel.mjs";
+import { BankError, opaqueId, safeEqual, sha256 } from "./shared/kernel.mjs";
 
 const MAX_BODY = 64 * 1024;
+const MAX_BACKUP_BODY = 4 * 1024 * 1024;
 
-async function body(request) {
+async function body(request, maximum = MAX_BODY) {
   let total = 0; const chunks = [];
-  for await (const chunk of request) { total += chunk.length; if (total > MAX_BODY) throw new BankError("REQUEST_TOO_LARGE", 413); chunks.push(chunk); }
+  for await (const chunk of request) { total += chunk.length; if (total > maximum) throw new BankError("REQUEST_TOO_LARGE", 413); chunks.push(chunk); }
   if (chunks.length === 0) return {};
   try { return JSON.parse(Buffer.concat(chunks).toString("utf8")); } catch { throw new BankError("INVALID_JSON"); }
 }
@@ -34,9 +35,21 @@ export function createPlatformHttpServer(platform, { adminToken = null, requireT
       await platform.repository.refresh?.();
       if (method === "GET" && path === "/v2/capabilities") return json(response, 200, { data: platform.capabilities() }, correlationId);
 
-      if (method === "POST" && path.startsWith("/v2/admin/")) {
+      if ((method === "GET" || method === "POST") && path.startsWith("/v2/admin/")) {
         if (!adminToken || typeof request.headers["x-bni-admin-token"] !== "string" || !safeEqual(request.headers["x-bni-admin-token"], adminToken)) throw new BankError("FORBIDDEN", 403);
-        const input = await body(request);
+        if (method === "GET" && path === "/v2/admin/backup") {
+          if (!platform.operations.backup) throw new BankError("BACKUP_NOT_CONFIGURED", 503);
+          const backup = platform.operations.backup.create();
+          return json(response, 200, { data: { backup: backup.toString("base64url"), sha256: sha256(backup), manifest: platform.operations.backup.manifest(), reconciliation: platform.operations.reconciliation.run() } }, correlationId);
+        }
+        if (method !== "POST") throw new BankError("NOT_FOUND", 404);
+        const input = await body(request, path === "/v2/admin/restore" ? MAX_BACKUP_BODY : MAX_BODY);
+        if (path === "/v2/admin/restore") {
+          if (!platform.operations.backup || typeof input.backup !== "string" || !/^[A-Za-z0-9_-]+$/.test(input.backup)) throw new BankError("BACKUP_INVALID");
+          const backup = Buffer.from(input.backup, "base64url");
+          if (typeof input.sha256 !== "string" || !safeEqual(input.sha256, sha256(backup))) throw new BankError("BACKUP_CHECKSUM_MISMATCH");
+          return json(response, 200, { data: { manifest: await platform.operations.backup.restore(backup), reconciliation: platform.operations.reconciliation.run() } }, correlationId);
+        }
         if (path === "/v2/admin/provision-customer") return json(response, 201, { data: await platform.provisioning.provisionCustomer(input) }, correlationId);
         if (path === "/v2/admin/provision-merchant-terminal") return json(response, 201, { data: await platform.bniPay.provisionMerchantTerminal(input) }, correlationId);
         if (path === "/v2/admin/customers") return json(response, 201, { data: await platform.identity.bootstrapCustomer(input) }, correlationId);

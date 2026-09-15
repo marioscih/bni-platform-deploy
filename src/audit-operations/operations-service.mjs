@@ -1,5 +1,6 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { BankError, canonicalFields, sha256 } from "../shared/kernel.mjs";
+import { validateState } from "../shared/repository.mjs";
 
 export class ReconciliationService {
   constructor({ repository } = {}) { this.repository = repository; }
@@ -22,7 +23,9 @@ export class ReconciliationService {
 export class EncryptedBackupService {
   constructor({ repository, encryptionKey } = {}) { if (!Buffer.isBuffer(encryptionKey) || encryptionKey.length !== 32) throw new BankError("BACKUP_KEY_REQUIRED", 500); this.repository = repository; this.encryptionKey = encryptionKey; }
   create() { const iv = randomBytes(12); const cipher = createCipheriv("aes-256-gcm", this.encryptionKey, iv); const ciphertext = Buffer.concat([cipher.update(JSON.stringify(this.repository.snapshot())), cipher.final()]); return Buffer.concat([Buffer.from("BNIBAK01"), iv, cipher.getAuthTag(), ciphertext]); }
-  decrypt(backup) { if (!Buffer.isBuffer(backup) || backup.subarray(0, 8).toString() !== "BNIBAK01") throw new BankError("BACKUP_INVALID"); try { const iv = backup.subarray(8, 20), tag = backup.subarray(20, 36), ciphertext = backup.subarray(36); const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey, iv); decipher.setAuthTag(tag); return JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8")); } catch { throw new BankError("BACKUP_AUTHENTICATION_FAILED"); } }
+  decrypt(backup) { if (!Buffer.isBuffer(backup) || backup.subarray(0, 8).toString() !== "BNIBAK01") throw new BankError("BACKUP_INVALID"); try { const iv = backup.subarray(8, 20), tag = backup.subarray(20, 36), ciphertext = backup.subarray(36); const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey, iv); decipher.setAuthTag(tag); const snapshot = JSON.parse(Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8")); validateState(snapshot); return snapshot; } catch (error) { if (error instanceof BankError) throw error; throw new BankError("BACKUP_AUTHENTICATION_FAILED"); } }
+  async restore(backup, { requirePristine = true } = {}) { const snapshot = this.decrypt(backup); if (typeof this.repository.replaceSnapshot !== "function") throw new BankError("BACKUP_RESTORE_UNAVAILABLE", 503); await this.repository.replaceSnapshot(snapshot, { requirePristine }); return this.manifest(snapshot); }
+  manifest(snapshot = this.repository.snapshot()) { return { format: "BNIBAK01", schemaVersion: snapshot.schemaVersion, revision: snapshot.revision, customers: Object.keys(snapshot.customers).length, devices: Object.keys(snapshot.devices).length, accounts: Object.keys(snapshot.accounts).length, journals: Object.keys(snapshot.journals).length, paymentIntents: Object.keys(snapshot.paymentIntents).length, auditEvents: snapshot.audit.length }; }
 }
 
 export class MetricsRegistry {

@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import pg from "pg";
 import { AsyncMutex, BankError, clone } from "./kernel.mjs";
-import { emptyState, validateState } from "./repository.mjs";
+import { emptyState, isPristineState, validateState } from "./repository.mjs";
 
 const { Pool } = pg;
 const MIGRATION_LOCK = "bni-platform-migrations-v2";
@@ -87,6 +87,35 @@ export class PostgresBankRepository {
         await client.query("COMMIT");
         this.#state = draft;
         return clone(result);
+      } catch (error) {
+        await rollbackQuietly(client);
+        throw error;
+      } finally {
+        client.release();
+      }
+    });
+  }
+
+  async replaceSnapshot(snapshot, { requirePristine = true } = {}) {
+    this.#assertReady();
+    const next = { ...emptyState(), ...clone(snapshot) };
+    validateState(next);
+    if (!Number.isSafeInteger(next.revision) || next.revision < 0) throw new BankError("DATABASE_REVISION_INVALID", 500);
+    return this.#mutex.runExclusive(async () => {
+      const client = await this.#pool.connect();
+      try {
+        await client.query("BEGIN");
+        const locked = await client.query("SELECT revision, state FROM platform_state_store WHERE singleton = true FOR UPDATE");
+        if (locked.rowCount !== 1) throw new BankError("DATABASE_STATE_UNAVAILABLE", 503, true);
+        const current = normalizeState(locked.rows[0]);
+        if (requirePristine && !isPristineState(current)) throw new BankError("BACKUP_DESTINATION_NOT_EMPTY", 409);
+        await client.query(
+          "UPDATE platform_state_store SET revision = $1, state = $2::jsonb, updated_at = now() WHERE singleton = true",
+          [next.revision, JSON.stringify(next)],
+        );
+        await client.query("COMMIT");
+        this.#state = next;
+        return { revision: next.revision };
       } catch (error) {
         await rollbackQuietly(client);
         throw error;

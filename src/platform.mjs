@@ -8,8 +8,9 @@ import { BillService, UnavailableBillsAdapter } from "./bills/bill-service.mjs";
 import { CardService, UnavailableCardDetailsProvider, UnavailableWalletAdapter } from "./cards/card-service.mjs";
 import { BniPayService, generateIntentSigningKeyPair } from "./bni-pay/bni-pay-service.mjs";
 import { RuleRiskEngine } from "./fraud-compliance/risk-engine.mjs";
+import { EncryptedBackupService, ReconciliationService } from "./audit-operations/operations-service.mjs";
 
-export function createPlatform({ repository = new BankRepository(), tokenSigningKey, tokenIssuer, tokenAudience, activationPepper, intentSigningKeyPair = generateIntentSigningKeyPair(), bankDirectory = new BankDirectory(), billsAdapter = new UnavailableBillsAdapter(), cardDetailsProvider = new UnavailableCardDetailsProvider(), walletAdapter = new UnavailableWalletAdapter(), pushAdapter = new UnavailablePushAdapter(), riskEngine = null, now = () => new Date() } = {}) {
+export function createPlatform({ repository = new BankRepository(), tokenSigningKey, tokenIssuer, tokenAudience, activationPepper, intentSigningKeyPair = generateIntentSigningKeyPair(), bankDirectory = new BankDirectory(), billsAdapter = new UnavailableBillsAdapter(), cardDetailsProvider = new UnavailableCardDetailsProvider(), walletAdapter = new UnavailableWalletAdapter(), pushAdapter = new UnavailablePushAdapter(), riskEngine = null, backupEncryptionKey = null, now = () => new Date() } = {}) {
   riskEngine ??= new RuleRiskEngine({ now });
   const tokenService = new TokenService({ signingKey: tokenSigningKey, issuer: tokenIssuer, audience: tokenAudience, now });
   const identity = new IdentityService({ repository, tokenService, activationPepper, now });
@@ -20,8 +21,11 @@ export function createPlatform({ repository = new BankRepository(), tokenSigning
   const cards = new CardService({ repository, identity, detailsProvider: cardDetailsProvider, walletAdapter, now });
   const bniPay = new BniPayService({ repository, ledger, identity, documents, enrollmentPepper: activationPepper, intentPrivateKey: intentSigningKeyPair.privateKey, intentPublicKey: intentSigningKeyPair.publicKey, riskEngine, now });
   const rateLimiter = new SlidingWindowRateLimiter({ limit: 30, windowMs: 60_000, now });
+  const reconciliation = new ReconciliationService({ repository });
+  const backup = backupEncryptionKey ? new EncryptedBackupService({ repository, encryptionKey: backupEncryptionKey }) : null;
   return {
     repository, identity, ledger, documents, transfers, notifications, bills, cards, bniPay, rateLimiter,
+    operations: { reconciliation, backup },
     provisioning: {
       provisionCustomer(input) {
         return repository.transaction((state) => {

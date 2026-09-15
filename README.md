@@ -11,4 +11,9 @@ It intentionally excludes Android sources, signing material, activation credenti
 - `npm ci --omit=dev --ignore-scripts`
 - `npm start`
 - readiness endpoint: `/health/ready`
+- authenticated encrypted export: `GET /v2/admin/backup`
+- fail-closed pristine-database restore: `POST /v2/admin/restore`
 
+Production additionally requires `BNI_BACKUP_ENCRYPTION_SECRET` with at least
+32 random bytes. See `PERMANENT_FREE_DATABASE_MIGRATION.md` for the portable
+database cutover runbook.

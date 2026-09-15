@@ -46,6 +46,27 @@ export class BankRepository {
     });
   }
 
+  async replaceSnapshot(snapshot, { requirePristine = true } = {}) {
+    return this.#mutex.runExclusive(async () => {
+      if (requirePristine && !isPristineState(this.#state)) throw new BankError("BACKUP_DESTINATION_NOT_EMPTY", 409);
+      const next = { ...emptyState(), ...clone(snapshot) };
+      validateState(next);
+      if (!Number.isSafeInteger(next.revision) || next.revision < 0) throw new BankError("DATABASE_REVISION_INVALID", 500);
+      await this.#afterCommit(clone(next));
+      this.#state = next;
+      return { revision: next.revision };
+    });
+  }
+
+}
+
+export function isPristineState(state) {
+  if (!state || state.revision !== 0) return false;
+  return Object.entries(state).every(([key, value]) => {
+    if (key === "schemaVersion" || key === "revision") return true;
+    if (Array.isArray(value)) return value.length === 0;
+    return value && typeof value === "object" ? Object.keys(value).length === 0 : false;
+  });
 }
 
 export function validateState(state) {

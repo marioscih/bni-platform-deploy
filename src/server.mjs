@@ -13,6 +13,7 @@ if (!production && mode !== "integration") throw new Error("BNI_PLATFORM_MODE mu
 const tokenSigningKey = production ? deriveSecret("BNI_TOKEN_SIGNING_SECRET") : randomBytes(32);
 const activationPepper = production ? requiredSecret("BNI_ACTIVATION_PEPPER") : process.env.BNI_ACTIVATION_PEPPER ?? "integration-only-pepper-change-me";
 const adminToken = production ? requiredSecret("BNI_ADMIN_TOKEN") : process.env.BNI_ADMIN_TOKEN ?? null;
+const backupEncryptionKey = production ? deriveSecret("BNI_BACKUP_ENCRYPTION_SECRET") : createHash("sha256").update(process.env.BNI_BACKUP_ENCRYPTION_SECRET ?? "integration-backup-key").digest();
 const intentSigningKeyPair = production ? intentKeys(requiredSecret("BNI_INTENT_SIGNING_SECRET")) : undefined;
 const publicBaseUrl = production ? publicOrigin() : "https://integration.bni.invalid";
 const repository = production ? await productionRepository() : await integrationRepository();
@@ -23,6 +24,7 @@ const platform = createPlatform({
   tokenIssuer: `${publicBaseUrl}/identity`,
   tokenAudience: "bni-mobile-v2",
   activationPepper,
+  backupEncryptionKey,
   ...(intentSigningKeyPair ? { intentSigningKeyPair } : {}),
 });
 const server = createPlatformHttpServer(platform, {
