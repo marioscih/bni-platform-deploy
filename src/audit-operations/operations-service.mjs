@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
-import { BankError, canonicalFields, sha256 } from "../shared/kernel.mjs";
+import { BankError, canonicalFields, canonicalJson, sha256 } from "../shared/kernel.mjs";
 import { validateState } from "../shared/repository.mjs";
 
 export class ReconciliationService {
@@ -15,9 +15,34 @@ export class ReconciliationService {
     for (const account of Object.values(state.accounts)) if (derived[account.accountReference] !== account.balanceMinor) findings.push({ code: "BALANCE_PROJECTION_MISMATCH", reference: account.accountReference });
     for (const payment of Object.values(state.bniPayments)) if (payment.status === "APPROVED" && !state.journals[payment.transactionReference]) findings.push({ code: "MISSING_PAYMENT_JOURNAL", reference: payment.paymentIntentId });
     let previous = "0".repeat(64);
-    for (const event of state.audit) { const expected = sha256(canonicalFields(previous, event.eventId, event.type, event.subjectHash, event.actorHash, event.outcome, event.correlationId, JSON.stringify(event.details), event.occurredAt)); if (event.previousHash !== previous || event.eventHash !== expected) findings.push({ code: "AUDIT_CHAIN_BROKEN", reference: event.eventId }); previous = event.eventHash; }
+    for (const event of state.audit) {
+      const expected = auditHash(event, previous, canonicalJson(event.details));
+      const validHash = event.eventHash === expected || legacyAuditHashMatches(event, previous);
+      if (event.previousHash !== previous || !validHash) findings.push({ code: "AUDIT_CHAIN_BROKEN", reference: event.eventId });
+      previous = event.eventHash;
+    }
     return { status: findings.length ? "FAIL" : "PASS", findings, revision: state.revision, accounts: Object.keys(state.accounts).length, journals: Object.keys(state.journals).length, auditEvents: state.audit.length };
   }
+}
+
+function auditHash(event, previous, detailsJson) {
+  return sha256(canonicalFields(previous, event.eventId, event.type, event.subjectHash, event.actorHash, event.outcome, event.correlationId, detailsJson, event.occurredAt));
+}
+
+function legacyAuditHashMatches(event, previous) {
+  const entries = Object.entries(event.details ?? {});
+  if (entries.length > 8) return false;
+  return permute(entries, 0, (ordered) => event.eventHash === auditHash(event, previous, JSON.stringify(Object.fromEntries(ordered))));
+}
+
+function permute(entries, index, matches) {
+  if (index >= entries.length) return matches(entries);
+  for (let position = index; position < entries.length; position += 1) {
+    [entries[index], entries[position]] = [entries[position], entries[index]];
+    if (permute(entries, index + 1, matches)) return true;
+    [entries[index], entries[position]] = [entries[position], entries[index]];
+  }
+  return false;
 }
 
 export class EncryptedBackupService {

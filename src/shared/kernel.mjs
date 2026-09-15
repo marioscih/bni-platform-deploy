@@ -58,6 +58,19 @@ export function canonicalFields(...fields) {
   }).join("|");
 }
 
+export function canonicalJson(value) {
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item) ?? "null").join(",")}]`;
+  if (value && typeof value === "object") {
+    const fields = Object.keys(value).sort().flatMap((key) => {
+      const encoded = canonicalJson(value[key]);
+      return encoded === undefined ? [] : [`${JSON.stringify(key)}:${encoded}`];
+    });
+    return `{${fields.join(",")}}`;
+  }
+  return undefined;
+}
+
 export class AsyncMutex {
   #tail = Promise.resolve();
 
