@@ -1,4 +1,4 @@
-import { AsyncMutex, BankError, canonicalFields, canonicalJson, clone, iso, opaqueId, publicHash, sha256 } from "./kernel.mjs";
+import { AsyncMutex, BankError, canonicalFields, clone, iso, opaqueId, publicHash, sha256 } from "./kernel.mjs";
 
 export function emptyState() {
   return {
@@ -92,7 +92,7 @@ export function addAudit(state, { type, subjectReference, actorReference = "syst
     occurredAt: iso(now()),
   };
   event.previousHash = state.audit.at(-1)?.eventHash ?? "0".repeat(64);
-  event.eventHash = sha256(canonicalFields(event.previousHash, event.eventId, event.type, event.subjectHash, event.actorHash, event.outcome, event.correlationId, canonicalJson(event.details), event.occurredAt));
+  event.eventHash = sha256(canonicalFields(event.previousHash, event.eventId, event.type, event.subjectHash, event.actorHash, event.outcome, event.correlationId, JSON.stringify(event.details), event.occurredAt));
   state.audit.push(event);
   return event;
 }

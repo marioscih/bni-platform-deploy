@@ -25,7 +25,7 @@ export class LedgerService {
     return this.repository.transaction((state) => this.postJournalInState(state, { journalReference, idempotencyKey, type, description, postings, correlationId, metadata }));
   }
 
-  postJournalInState(state, { journalReference = opaqueId("journal"), idempotencyKey, type, description, postings, correlationId = opaqueId("corr"), metadata = {} }) {
+  postJournalInState(state, { journalReference = opaqueId("journal"), idempotencyKey, type, description, postings, correlationId = opaqueId("corr"), metadata = {}, bookedAt = null }) {
     requireOpaque(journalReference, "INVALID_JOURNAL_REFERENCE"); requireOpaque(idempotencyKey, "INVALID_IDEMPOTENCY_KEY");
     requireText(type, "INVALID_JOURNAL_TYPE", 64); requireText(description, "INVALID_DESCRIPTION", 140);
     const cached = state.ledgerIdempotency[idempotencyKey];
@@ -52,9 +52,11 @@ export class LedgerService {
       const held = this.#heldMinor(state, accountReference);
       if (!account.allowNegative && projected - held < -account.overdraftMinor) throw new BankError("INSUFFICIENT_FUNDS", 409);
     }
-    const bookedAt = iso(this.now());
+    const bookingDate = bookedAt == null ? this.now() : new Date(bookedAt);
+    if (Number.isNaN(bookingDate.getTime()) || bookingDate.getTime() > this.now().getTime() + 300_000) throw new BankError("INVALID_BOOKING_DATE");
+    const effectiveBookedAt = iso(bookingDate);
     for (const [accountReference, delta] of deltas) state.accounts[accountReference].balanceMinor += delta;
-    const journal = { journalReference, idempotencyKey, type, description, postings: normalized, correlationId, metadata, status: "BOOKED", bookedAt };
+    const journal = { journalReference, idempotencyKey, type, description, postings: normalized, correlationId, metadata, status: "BOOKED", bookedAt: effectiveBookedAt };
     state.journals[journalReference] = journal;
     state.ledgerIdempotency[idempotencyKey] = { journalReference, fingerprint: JSON.stringify(postings) };
     addAudit(state, { type: "JOURNAL_BOOKED", subjectReference: journalReference, outcome: "SUCCESS", correlationId, details: { journalType: type, postingCount: normalized.length } }, this.now);
@@ -97,14 +99,27 @@ export class LedgerService {
     if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new BankError("INVALID_PAGE_SIZE");
     const state = this.repository.snapshot(); const account = state.accounts[requireOpaque(accountReference)];
     if (!account || account.ownerReference !== requestingOwnerReference) throw new BankError("ACCOUNT_NOT_FOUND", 404);
-    const all = Object.values(state.journals).flatMap((journal) => journal.postings.filter((posting) => posting.accountReference === accountReference).map((posting) => ({
-      movementReference: posting.postingReference, transactionReference: journal.journalReference, type: journal.type,
-      description: journal.description, amountMinor: posting.deltaMinor, currency: posting.currency,
-      status: journal.status, bookedAt: journal.bookedAt, correlationId: journal.correlationId,
-    }))).sort((a, b) => b.bookedAt.localeCompare(a.bookedAt) || b.movementReference.localeCompare(a.movementReference));
+    const all = Object.values(state.journals).flatMap((journal) => {
+      const transfer = Object.values(state.transfers).find((item) => item.transactionReference === journal.journalReference);
+      return journal.postings.filter((posting) => posting.accountReference === accountReference).map((posting) => ({
+        movementReference: posting.postingReference, transactionReference: journal.journalReference, type: journal.type,
+        description: journal.description, amountMinor: posting.deltaMinor, currency: posting.currency,
+        status: journal.status, bookedAt: journal.bookedAt, correlationId: journal.correlationId,
+        metadata: journal.metadata ?? {}, transfer: transfer ?? undefined,
+      }));
+    }).sort((a, b) => b.bookedAt.localeCompare(a.bookedAt) || b.movementReference.localeCompare(a.movementReference));
     const start = cursor ? Math.max(0, all.findIndex((entry) => entry.movementReference === cursor) + 1) : 0;
     const items = all.slice(start, start + limit);
     return { items, nextCursor: start + limit < all.length ? items.at(-1).movementReference : null };
+  }
+
+  movement(accountReference, movementReference, requestingOwnerReference) {
+    const page = this.movements(accountReference, requestingOwnerReference, { limit: 100 });
+    const movement = page.items.find((item) => item.movementReference === requireOpaque(movementReference));
+    if (!movement) throw new BankError("MOVEMENT_NOT_FOUND", 404);
+    const state = this.repository.snapshot();
+    const transfer = Object.values(state.transfers).find((item) => item.transactionReference === movement.transactionReference);
+    return transfer ? { ...movement, transfer } : movement;
   }
 
   #heldMinor(state, accountReference) {

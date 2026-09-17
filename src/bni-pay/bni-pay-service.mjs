@@ -133,7 +133,7 @@ export class BniPayService {
   nfcPayload(paymentIntentId) {
     const intent = this.getPaymentIntent(paymentIntentId);
     if (intent.status !== "PENDING") throw new BankError(`PAYMENT_INTENT_${intent.status}`, 409);
-    return { protocolVersion: "1", paymentIntentId: intent.paymentIntentId, terminalNonce: intent.terminalNonce };
+    return { protocolVersion: "1", paymentIntentId: intent.paymentIntentId, terminalNonce: intent.terminalNonce, intentSignature: intent.signature };
   }
 
   qrPayload(paymentIntentId) { const intent = this.getPaymentIntent(paymentIntentId); return `bni-pay://pay/${intent.paymentIntentId}`; }
@@ -183,6 +183,22 @@ export class BniPayService {
       const intent = state.paymentIntents[requireOpaque(paymentIntentId)]; if (!intent || intent.merchantId !== merchantId || intent.terminalId !== terminalId) throw new BankError("PAYMENT_INTENT_NOT_FOUND", 404);
       if (intent.status !== "PENDING") throw new BankError("PAYMENT_INTENT_NOT_CANCELLABLE", 409);
       intent.status = "CANCELLED"; intent.cancelledAt = iso(this.now()); state.idempotency[key] = intent.paymentIntentId; return this.#publicIntent(intent);
+    });
+  }
+
+  async declineByCustomer({ paymentIntentId, terminalNonce, customerReference, authorizationNonce, idempotencyKey }) {
+    return this.repository.transaction((state) => {
+      const idem = `bni-customer-decline:${requireOpaque(idempotencyKey)}`;
+      if (state.idempotency[idem]) return state.bniPayments[state.idempotency[idem]];
+      const intent = state.paymentIntents[requireOpaque(paymentIntentId)]; if (!intent) throw new BankError("PAYMENT_INTENT_NOT_FOUND", 404);
+      if (intent.status === "DECLINED") return state.bniPayments[intent.paymentIntentId];
+      if (intent.status !== "PENDING" || new Date(intent.expiresAt) <= this.now()) throw new BankError("PAYMENT_INTENT_NOT_DECLINABLE", 409);
+      if (terminalNonce !== intent.terminalNonce) throw new BankError("TERMINAL_NONCE_INVALID", 403);
+      const replay = `customer-decline:${requireOpaque(authorizationNonce)}`; if (state.replayNonces[replay]) throw new BankError("AUTHORIZATION_REPLAY_REJECTED", 409);
+      state.replayNonces[replay] = iso(this.now());
+      const payment = this.#declineInState(state, intent, customerReference, null, idempotencyKey, "CUSTOMER_DECLINED");
+      state.idempotency[idem] = intent.paymentIntentId;
+      return payment;
     });
   }
 

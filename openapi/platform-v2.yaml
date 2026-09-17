@@ -1,0 +1,48 @@
+openapi: 3.1.0
+info:
+  title: BNI Banking Platform API
+  version: 2.1.0
+servers:
+  - url: https://api.example.com
+security:
+  - bearerAuth: []
+paths:
+  /health/live:
+    get: { security: [], responses: { '200': { description: Live } } }
+  /health/ready:
+    get: { security: [], responses: { '200': { description: Dependency readiness } } }
+  /v2/capabilities:
+    get: { security: [], responses: { '200': { description: Authoritative capability flags } } }
+  /v2/mobile/enrollment/start:
+    post: { security: [], responses: { '200': { description: Device enrollment challenge } } }
+  /v2/mobile/enrollment/complete:
+    post: { security: [], responses: { '200': { description: Device enrolled } } }
+  /v2/mobile/login/start:
+    post: { security: [], responses: { '200': { description: Login challenge } } }
+  /v2/mobile/login/complete:
+    post: { security: [], responses: { '200': { description: Authorization code } } }
+  /oauth/token:
+    post: { security: [], responses: { '200': { description: Rotating device-bound token pair } } }
+  /v2/merchant/enrollment/complete:
+    post: { security: [], responses: { '200': { description: One-time terminal enrollment bound to its device public key } } }
+  /v2/accounts:
+    get: { responses: { '200': { description: Customer accounts and balances } } }
+  /v2/accounts/{accountReference}/movements:
+    get:
+      parameters: [{ name: accountReference, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Paged ledger-derived movements } }
+  /v2/transfers/quotes:
+    post: { responses: { '201': { description: Authoritative transfer quote } } }
+  /v2/bills/inquiry:
+    post: { responses: { '200': { description: Provider-authoritative bill quote }, '503': { description: Provider disabled } } }
+  /v2/cards:
+    get: { responses: { '200': { description: Server card metadata without PAN or CVC } } }
+  /v2/bni-pay/payment-intents/{paymentIntentId}:
+    get:
+      parameters: [{ name: paymentIntentId, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: Signed BNI Pay intent } }
+  /v2/merchant/payment-intents:
+    post: { security: [], responses: { '201': { description: Terminal-signed payment intent creation } } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
