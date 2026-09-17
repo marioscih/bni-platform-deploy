@@ -142,7 +142,8 @@ export function createPlatform({ repository = new BankRepository(), tokenSigning
     },
     capabilities() {
       return {
-        accounts: true, transfersInternal: true, transfersSepa: sepaAdapter.configured === true, notificationsInbox: true,
+        accounts: true, transfersInternal: true, transfersSepa: sepaAdapter.configured === true,
+        transferComparisonNoAuth: comparisonNoAuthTransfers === true, notificationsInbox: true,
         push: pushAdapter.configured === true, documents: true, bills: billsAdapter.configured === true,
         cards: true, cardDetails: cardDetailsProvider.configured === true, wallet: walletAdapter.configured === true,
         bniPay: true, genericPosCardPayment: false,
