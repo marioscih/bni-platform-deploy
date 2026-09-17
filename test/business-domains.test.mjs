@@ -67,6 +67,19 @@ test("simulator SEPA adapter books one idempotent accepted transfer and receipt"
   assert.equal(f.ledger.account("account_alpha", "customer_alpha").balanceMinor, 98_750);
 });
 
+test("comparison authorization bypass is customer-bound, audited and idempotent", async () => {
+  const f = await fixture(); const service = new TransferService({ ...f, bankDirectory: new BankDirectory() });
+  const beneficiary = await service.addBeneficiary({ ownerReference: "customer_alpha", displayName: "Destinatario", internalAccountReference: "account_beta" });
+  const quote = await service.createQuote({ customerReference: "customer_alpha", sourceAccountReference: "account_alpha", beneficiaryReference: beneficiary.beneficiaryReference, amountMinor: 2_500, currency: "EUR", description: "Confronto no auth", idempotencyKey: "quote_comparison_001" });
+  await assert.rejects(() => service.authorizeComparison({ quoteReference: quote.quoteReference, customerReference: "customer_beta", idempotencyKey: "comparison_authorize_001" }), /FORBIDDEN/);
+  const first = await service.authorizeComparison({ quoteReference: quote.quoteReference, customerReference: "customer_alpha", idempotencyKey: "comparison_authorize_001" });
+  const retry = await service.authorizeComparison({ quoteReference: quote.quoteReference, customerReference: "customer_alpha", idempotencyKey: "comparison_authorize_001" });
+  assert.equal(first.transferReference, retry.transferReference);
+  assert.equal(first.status, "SETTLED");
+  assert.equal(f.ledger.account("account_alpha", "customer_alpha").balanceMinor, 97_500);
+  assert.match(JSON.stringify(f.repository.snapshot()), /TRANSFER_COMPARISON_AUTHORIZATION_BYPASS/);
+});
+
 test("outbox projects idempotent inbox notifications with allowlisted deep links", async () => {
   const f = await fixture(); const notifications = new NotificationService({ repository: f.repository, now: f.now });
   const first = await notifications.projectPending(); const second = await notifications.projectPending();

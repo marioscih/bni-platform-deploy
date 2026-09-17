@@ -20,6 +20,7 @@ const intentSigningKeyPair = production ? intentKeys(requiredSecret("BNI_INTENT_
 const publicBaseUrl = production ? publicOrigin() : "https://integration.bni.invalid";
 const repository = production ? await productionRepository() : await integrationRepository();
 const simulatorEnabled = process.env.BNI_SIMULATOR_SERVICES === "enabled";
+const comparisonNoAuthTransfers = simulatorEnabled && process.env.BNI_COMPARISON_NOAUTH === "enabled";
 await repairCustomerProjection(repository, { simulatorEnabled });
 
 const platform = createPlatform({
@@ -29,6 +30,7 @@ const platform = createPlatform({
   tokenAudience: "bni-mobile-v2",
   activationPepper,
   backupEncryptionKey,
+  comparisonNoAuthTransfers,
   ...(simulatorEnabled ? {
     sepaAdapter: new SimulatorSepaAdapter(),
     cardDetailsProvider: new SimulatorCardDetailsProvider({ repository, secret: deriveSecret("BNI_SIMULATOR_SECRET") }),

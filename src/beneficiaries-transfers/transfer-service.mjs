@@ -190,13 +190,22 @@ export class TransferService {
     return this.documents.createReceiptInState(state, { ownerReference: transfer.customerReference, operationReference: transfer.transferReference, type: "TRANSFER_RECEIPT", title: "Distinta bonifico", correlationId: transfer.correlationId, fields });
   }
 
-  async authorize({ quoteReference, challengeId, signature, idempotencyKey }) {
+  async authorizeComparison({ quoteReference, customerReference, idempotencyKey }) {
+    return this.authorize({ quoteReference, idempotencyKey, comparisonCustomerReference: requireOpaque(customerReference) });
+  }
+
+  async authorize({ quoteReference, challengeId, signature, idempotencyKey, comparisonCustomerReference = null }) {
     const initial = await this.repository.transaction((state) => {
       const idem = `transfer-authorize:${requireOpaque(idempotencyKey)}`;
       if (state.idempotency[idem]) return { cached: true, transfer: state.transfers[state.idempotency[idem]] };
       const quote = state.transferQuotes[requireOpaque(quoteReference)];
       if (!quote || quote.status !== "QUOTED" || new Date(quote.expiresAt) <= this.now()) throw new BankError("QUOTE_NOT_AUTHORIZABLE", 409);
-      this.identity.verifyScaInState(state, { challengeId, signature, expected: { operation: "TRANSFER", accountReference: quote.sourceAccountReference, counterpartyReference: quote.beneficiaryReference, amountMinor: quote.totalDebitMinor, currency: quote.currency, operationReference: quote.quoteReference, idempotencyKey: quote.idempotencyKey } });
+      if (comparisonCustomerReference == null) {
+        this.identity.verifyScaInState(state, { challengeId, signature, expected: { operation: "TRANSFER", accountReference: quote.sourceAccountReference, counterpartyReference: quote.beneficiaryReference, amountMinor: quote.totalDebitMinor, currency: quote.currency, operationReference: quote.quoteReference, idempotencyKey: quote.idempotencyKey } });
+      } else {
+        if (quote.customerReference !== comparisonCustomerReference) throw new BankError("FORBIDDEN", 403);
+        addAudit(state, { type: "TRANSFER_COMPARISON_AUTHORIZATION_BYPASS", subjectReference: quote.quoteReference, actorReference: quote.customerReference, outcome: "SIMULATOR_ONLY" }, this.now);
+      }
       const beneficiary = state.beneficiaries[quote.beneficiaryReference];
       const risk = this.riskEngine.evaluate({ operation: "TRANSFER", customerReference: quote.customerReference, counterpartyReference: quote.beneficiaryReference, amountMinor: quote.totalDebitMinor, currency: quote.currency }, state);
       if (risk.decision !== "ALLOW") throw new BankError("TRANSFER_DECLINED_BY_RISK", 409);

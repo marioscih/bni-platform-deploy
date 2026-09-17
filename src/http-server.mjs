@@ -100,6 +100,11 @@ export function createPlatformHttpServer(platform, { adminToken = null, requireT
       if (method === "POST" && path === "/v2/transfers/quotes") { const input = await body(request); return json(response, 201, { data: await platform.transfers.createQuote({ ...input, customerReference: principal.sub, idempotencyKey: requiredIdempotency(request, input) }) }, correlationId); }
       const transferSca = path.match(/^\/v2\/transfers\/([^/]+)\/sca$/); if (method === "POST" && transferSca) return json(response, 200, { data: await platform.transfers.createScaChallenge({ quoteReference: transferSca[1], deviceReference: principal.device }) }, correlationId);
       const transferAuth = path.match(/^\/v2\/transfers\/([^/]+)\/authorize$/); if (method === "POST" && transferAuth) { const input = await body(request); return json(response, 200, { data: await platform.transfers.authorize({ ...input, quoteReference: transferAuth[1], idempotencyKey: requiredIdempotency(request, input) }) }, correlationId); }
+      const comparisonTransferAuth = path.match(/^\/v2\/comparison\/transfers\/([^/]+)\/authorize$/); if (method === "POST" && comparisonTransferAuth) {
+        if (platform.features?.comparisonNoAuthTransfers !== true) throw new BankError("NOT_FOUND", 404);
+        const input = await body(request);
+        return json(response, 200, { data: await platform.transfers.authorizeComparison({ quoteReference: comparisonTransferAuth[1], customerReference: principal.sub, idempotencyKey: requiredIdempotency(request, input) }) }, correlationId);
+      }
       const transferDetail = path.match(/^\/v2\/transfers\/([^/]+)$/); if (method === "GET" && transferDetail) return json(response, 200, { data: platform.transfers.get(transferDetail[1], principal.sub) }, correlationId);
       if (method === "GET" && path === "/v2/notifications") return json(response, 200, { data: platform.notifications.list(principal.sub) }, correlationId);
       const notificationRead = path.match(/^\/v2\/notifications\/([^/]+)\/read$/); if (method === "POST" && notificationRead) return json(response, 200, { data: await platform.notifications.markRead(notificationRead[1], principal.sub) }, correlationId);

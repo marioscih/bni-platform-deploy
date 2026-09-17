@@ -11,7 +11,7 @@ import { BniPayService, generateIntentSigningKeyPair } from "./bni-pay/bni-pay-s
 import { RuleRiskEngine } from "./fraud-compliance/risk-engine.mjs";
 import { EncryptedBackupService, ReconciliationService } from "./audit-operations/operations-service.mjs";
 
-export function createPlatform({ repository = new BankRepository(), tokenSigningKey, tokenIssuer, tokenAudience, activationPepper, intentSigningKeyPair = generateIntentSigningKeyPair(), bankDirectory = new BankDirectory(), sepaAdapter = new UnavailableSepaAdapter(), billsAdapter = new UnavailableBillsAdapter(), cardDetailsProvider = new UnavailableCardDetailsProvider(), walletAdapter = new UnavailableWalletAdapter(), pushAdapter = new UnavailablePushAdapter(), riskEngine = null, backupEncryptionKey = null, now = () => new Date() } = {}) {
+export function createPlatform({ repository = new BankRepository(), tokenSigningKey, tokenIssuer, tokenAudience, activationPepper, intentSigningKeyPair = generateIntentSigningKeyPair(), bankDirectory = new BankDirectory(), sepaAdapter = new UnavailableSepaAdapter(), billsAdapter = new UnavailableBillsAdapter(), cardDetailsProvider = new UnavailableCardDetailsProvider(), walletAdapter = new UnavailableWalletAdapter(), pushAdapter = new UnavailablePushAdapter(), riskEngine = null, backupEncryptionKey = null, comparisonNoAuthTransfers = false, now = () => new Date() } = {}) {
   riskEngine ??= new RuleRiskEngine({ now });
   const tokenService = new TokenService({ signingKey: tokenSigningKey, issuer: tokenIssuer, audience: tokenAudience, now });
   const identity = new IdentityService({ repository, tokenService, activationPepper, now });
@@ -26,6 +26,7 @@ export function createPlatform({ repository = new BankRepository(), tokenSigning
   const backup = backupEncryptionKey ? new EncryptedBackupService({ repository, encryptionKey: backupEncryptionKey }) : null;
   return {
     repository, identity, ledger, documents, transfers, notifications, bills, cards, bniPay, rateLimiter,
+    features: Object.freeze({ comparisonNoAuthTransfers: comparisonNoAuthTransfers === true }),
     operations: { reconciliation, backup },
     provisioning: {
       correctAccountHolder({ accountReference, holderName, idempotencyKey }) {
