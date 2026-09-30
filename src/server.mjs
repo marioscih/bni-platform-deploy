@@ -39,6 +39,7 @@ const platform = createPlatform({
 });
 const server = createPlatformHttpServer(platform, {
   adminToken,
+  recoveryAdminToken: process.env.BNI_RECOVERY_ADMIN_TOKEN ? requiredSecret("BNI_RECOVERY_ADMIN_TOKEN") : null,
   requireTlsForwarding: production ? process.env.BNI_REQUIRE_TLS_FORWARDING !== "false" : false,
 });
 const port = integerEnvironment("PORT", 8789);

@@ -97,13 +97,38 @@ export class IdentityService {
     return { customerReference, status };
   }
 
+  async issueDeviceRecovery({ customerReference, activationCode, recoveryReference, ttlSeconds = 900 }) {
+    requireOpaque(customerReference, "INVALID_CUSTOMER_REFERENCE");
+    requireOpaque(recoveryReference, "INVALID_RECOVERY_REFERENCE");
+    if (typeof activationCode !== "string" || !/^[A-Z0-9-]{12,64}$/.test(activationCode)) throw new BankError("INVALID_ACTIVATION_CODE");
+    if (!Number.isInteger(ttlSeconds) || ttlSeconds < 60 || ttlSeconds > 900) throw new BankError("INVALID_RECOVERY_TTL");
+    const hash = sha256(`${this.activationPepper}|${activationCode}`);
+    return this.repository.transaction((state) => {
+      if (state.customers[customerReference]?.status !== ACTIVE) throw new BankError("CUSTOMER_NOT_ACTIVE", 403);
+      const key = `device-recovery:${recoveryReference}`;
+      const previous = state.idempotency[key];
+      if (previous) {
+        if (previous.customerReference !== customerReference || !safeEqual(previous.hash, hash)) throw new BankError("IDEMPOTENCY_CONFLICT", 409);
+        return { customerReference, recoveryReference, expiresAt: previous.expiresAt };
+      }
+      const expiresAt = iso(new Date(this.now().getTime() + ttlSeconds * 1000));
+      state.activations[customerReference] = { hash, consumedAt: null, failures: 0, expiresAt, recoveryReference };
+      for (const challenge of Object.values(state.challenges)) {
+        if (challenge.type === "ENROLLMENT" && challenge.customerReference === customerReference && !challenge.consumedAt) challenge.consumedAt = iso(this.now());
+      }
+      state.idempotency[key] = { customerReference, hash, expiresAt };
+      addAudit(state, { type: "DEVICE_RECOVERY_ISSUED", subjectReference: customerReference, actorReference: "operations", outcome: "SUCCESS", details: { recoveryReference, expiresAt } }, this.now);
+      return { customerReference, recoveryReference, expiresAt };
+    });
+  }
+
   async beginEnrollment({ customerReference, deviceReference, publicKeySpki, activationCode }) {
     requireOpaque(customerReference, "INVALID_CUSTOMER_REFERENCE"); requireOpaque(deviceReference, "INVALID_DEVICE_REFERENCE");
     keyFromSpki(publicKeySpki);
     const result = await this.repository.transaction((state) => {
       const customer = state.customers[customerReference];
       const activation = state.activations[customerReference];
-      if (!customer || customer.status !== ACTIVE || !activation || activation.consumedAt) throw new BankError("ENROLLMENT_DENIED", 403);
+      if (!customer || customer.status !== ACTIVE || !activation || activation.consumedAt || (activation.expiresAt && new Date(activation.expiresAt).getTime() <= this.now().getTime())) throw new BankError("ENROLLMENT_DENIED", 403);
       const supplied = sha256(`${this.activationPepper}|${activationCode ?? ""}`);
       if (!safeEqual(supplied, activation.hash)) {
         activation.failures += 1;
@@ -114,7 +139,7 @@ export class IdentityService {
       const nonce = randomToken(32); const expiresAt = iso(new Date(this.now().getTime() + this.challengeTtlMs));
       const challengeId = opaqueId("enroll");
       const material = canonicalFields("ENROLL_DEVICE_V1", challengeId, customerReference, deviceReference, nonce, expiresAt);
-      state.challenges[challengeId] = { challengeId, type: "ENROLLMENT", customerReference, deviceReference, publicKeySpki, nonce, expiresAt, material, consumedAt: null };
+      state.challenges[challengeId] = { challengeId, type: "ENROLLMENT", customerReference, deviceReference, publicKeySpki, activationHash: activation.hash, nonce, expiresAt, material, consumedAt: null };
       addAudit(state, { type: "DEVICE_ENROLLMENT_STARTED", subjectReference: deviceReference, actorReference: customerReference, outcome: "CHALLENGE_ISSUED" }, this.now);
       return { challengeId, nonce, expiresAt, material };
     });
@@ -126,6 +151,8 @@ export class IdentityService {
     requireOpaque(challengeId, "INVALID_CHALLENGE_ID"); requireOpaque(appInstanceReference, "INVALID_APP_INSTANCE_REFERENCE");
     return this.repository.transaction((state) => {
       const challenge = this.#activeChallenge(state, challengeId, "ENROLLMENT");
+      const activation = state.activations[challenge.customerReference];
+      if (state.customers[challenge.customerReference]?.status !== ACTIVE || !activation || activation.consumedAt || !safeEqual(activation.hash, challenge.activationHash) || (activation.expiresAt && new Date(activation.expiresAt).getTime() <= this.now().getTime())) throw new BankError("ENROLLMENT_DENIED", 403);
       if (!verifyDevice(challenge.publicKeySpki, challenge.material, signature)) throw new BankError("INVALID_DEVICE_SIGNATURE", 403);
       if (state.devices[challenge.deviceReference]) throw new BankError("DEVICE_EXISTS", 409);
       const device = {
