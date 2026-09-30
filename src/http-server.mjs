@@ -19,7 +19,7 @@ function json(response, status, data, correlationId, headers = {}) {
 function requiredIdempotency(request, input) { const value = request.headers["idempotency-key"] ?? input.idempotencyKey; if (typeof value !== "string") throw new BankError("IDEMPOTENCY_KEY_REQUIRED"); return value; }
 function bearer(request) { const value = request.headers.authorization; if (typeof value !== "string" || !value.startsWith("Bearer ")) throw new BankError("UNAUTHENTICATED", 401); return value.slice(7); }
 
-export function createPlatformHttpServer(platform, { adminToken = null, requireTlsForwarding = true } = {}) {
+export function createPlatformHttpServer(platform, { adminToken = null, recoveryAdminToken = null, requireTlsForwarding = true } = {}) {
   return createServer(async (request, response) => {
     const correlationId = typeof request.headers["x-correlation-id"] === "string" ? request.headers["x-correlation-id"].slice(0, 96) : opaqueId("corr");
     try {
@@ -36,6 +36,11 @@ export function createPlatformHttpServer(platform, { adminToken = null, requireT
       if (method === "GET" && path === "/v2/capabilities") return json(response, 200, { data: platform.capabilities() }, correlationId);
 
       if ((method === "GET" || method === "POST") && path.startsWith("/v2/admin/")) {
+        if (method === "POST" && path === "/v2/admin/device-recovery") {
+          const supplied = request.headers["x-bni-admin-token"];
+          if (typeof supplied !== "string" || !((adminToken && safeEqual(supplied, adminToken)) || (recoveryAdminToken && safeEqual(supplied, recoveryAdminToken)))) throw new BankError("FORBIDDEN", 403);
+          return json(response, 200, { data: await platform.identity.issueDeviceRecovery(await body(request)) }, correlationId);
+        }
         if (!adminToken || typeof request.headers["x-bni-admin-token"] !== "string" || !safeEqual(request.headers["x-bni-admin-token"], adminToken)) throw new BankError("FORBIDDEN", 403);
         if (method === "GET" && path === "/v2/admin/backup") {
           if (!platform.operations.backup) throw new BankError("BACKUP_NOT_CONFIGURED", 503);
